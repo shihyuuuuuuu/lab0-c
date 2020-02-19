@@ -16,8 +16,8 @@
 #include "console.h"
 #include "report.h"
 
-
 /* Some global values */
+bool simulation = false;
 static cmd_ptr cmd_list = NULL;
 static param_ptr param_list = NULL;
 static bool block_flag = false;
@@ -31,9 +31,9 @@ static double first_time;
 static double last_time;
 
 /*
-  Implement buffered I/O using variant of RIO package from CS:APP
-  Must create stack of buffers to handle I/O with nested source commands.
-*/
+ * Implement buffered I/O using variant of RIO package from CS:APP
+ * Must create stack of buffers to handle I/O with nested source commands.
+ */
 
 #define RIO_BUFSIZE 8192
 typedef struct RIO_ELE rio_t, *rio_ptr;
@@ -46,20 +46,19 @@ struct RIO_ELE {
     rio_ptr prev;          /* Next element in stack */
 };
 
-rio_ptr buf_stack;
-char linebuf[RIO_BUFSIZE];
+static rio_ptr buf_stack;
+static char linebuf[RIO_BUFSIZE];
 
 /* Maximum file descriptor */
-int fd_max = 0;
+static int fd_max = 0;
 
 /* Parameters */
 static int err_limit = 5;
 static int err_cnt = 0;
-static int echo = 0;
+static bool echo = 0;
 
 static bool quit_flag = false;
-static char *prompt = "cmd>";
-
+static char *prompt = "cmd> ";
 
 /* Optional function to call as part of exit process */
 /* Maximum number of quit functions */
@@ -68,13 +67,13 @@ static char *prompt = "cmd>";
 static cmd_function quit_helpers[MAXQUIT];
 static int quit_helper_cnt = 0;
 
-bool do_quit_cmd(int argc, char *argv[]);
-bool do_help_cmd(int argc, char *argv[]);
-bool do_option_cmd(int argc, char *argv[]);
-bool do_source_cmd(int argc, char *argv[]);
-bool do_log_cmd(int argc, char *argv[]);
-bool do_time_cmd(int argc, char *argv[]);
-bool do_comment_cmd(int argc, char *argv[]);
+static bool do_quit_cmd(int argc, char *argv[]);
+static bool do_help_cmd(int argc, char *argv[]);
+static bool do_option_cmd(int argc, char *argv[]);
+static bool do_source_cmd(int argc, char *argv[]);
+static bool do_log_cmd(int argc, char *argv[]);
+static bool do_time_cmd(int argc, char *argv[]);
+static bool do_comment_cmd(int argc, char *argv[]);
 
 static void init_in();
 
@@ -90,6 +89,7 @@ void init_cmd()
     param_list = NULL;
     err_cnt = 0;
     quit_flag = false;
+
     add_cmd("help", do_help_cmd, "                | Show documentation");
     add_cmd("option", do_option_cmd,
             " [name val]     | Display or set options");
@@ -99,14 +99,12 @@ void init_cmd()
     add_cmd("log", do_log_cmd, " file           | Copy output to file");
     add_cmd("time", do_time_cmd, " cmd arg ...    | Time command execution");
     add_cmd("#", do_comment_cmd, " ...            | Display comment");
+    add_param("simulation", (int *) &simulation, "Start/Stop simulation mode",
+              NULL);
     add_param("verbose", &verblevel, "Verbosity level", NULL);
     add_param("error", &err_limit, "Number of errors until exit", NULL);
-    add_param("echo", &echo, "Do/don't echo commands", NULL);
-#if 0
-    add_param("megabytes", &mblimit, "Maximum megabytes allowed", NULL);
-    add_param("seconds", &timelimit, "Maximum seconds allowed",
-              change_timeout);
-#endif
+    add_param("echo", (int *) &echo, "Do/don't echo commands", NULL);
+
     init_in();
     init_time(&last_time);
     first_time = last_time;
@@ -121,6 +119,7 @@ void add_cmd(char *name, cmd_function operation, char *documentation)
         last_loc = &next_cmd->next;
         next_cmd = next_cmd->next;
     }
+
     cmd_ptr ele = (cmd_ptr) malloc_or_fail(sizeof(cmd_ele), "add_cmd");
     ele->name = name;
     ele->operation = operation;
@@ -141,6 +140,7 @@ void add_param(char *name,
         last_loc = &next_param->next;
         next_param = next_param->next;
     }
+
     param_ptr ele = (param_ptr) malloc_or_fail(sizeof(param_ele), "add_param");
     ele->name = name;
     ele->valp = valp;
@@ -150,20 +150,20 @@ void add_param(char *name,
     *last_loc = ele;
 }
 
-
 /* Parse a string into a command line */
-char **parse_args(char *line, int *argcp)
+static char **parse_args(char *line, int *argcp)
 {
     /*
-      Must first determine how many arguments there are.
-      Replace all white space with null characters
-    */
+     * Must first determine how many arguments there are.
+     * Replace all white space with null characters
+     */
     size_t len = strlen(line);
     /* First copy into buffer with each substring null-terminated */
     char *buf = malloc_or_fail(len + 1, "parse_args");
     char *src = line;
     char *dst = buf;
     bool skipping = true;
+
     int c;
     int argc = 0;
     while ((c = *src++) != '\0') {
@@ -182,20 +182,21 @@ char **parse_args(char *line, int *argcp)
             *dst++ = c;
         }
     }
+
     /* Now assemble into array of strings */
     char **argv = calloc_or_fail(argc, sizeof(char *), "parse_args");
-    size_t i;
     src = buf;
-    for (i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; i++) {
         argv[i] = strsave_or_fail(src, "parse_args");
         src += strlen(argv[i]) + 1;
     }
+
     free_block(buf, len + 1);
     *argcp = argc;
     return argv;
 }
 
-void record_error()
+static void record_error()
 {
     err_cnt++;
     if (err_cnt >= err_limit) {
@@ -209,6 +210,7 @@ static bool interpret_cmda(int argc, char *argv[])
 {
     if (argc == 0)
         return true;
+
     /* Try to find matching command */
     cmd_ptr next_cmd = cmd_list;
     bool ok = true;
@@ -223,40 +225,36 @@ static bool interpret_cmda(int argc, char *argv[])
         record_error();
         ok = false;
     }
+
     return ok;
 }
 
 /* Execute a command from a command line */
-bool interpret_cmd(char *cmdline)
+static bool interpret_cmd(char *cmdline)
 {
-    int argc;
     if (quit_flag)
         return false;
+
 #if RPT >= 6
     report(6, "Interpreting command '%s'\n", cmdline);
 #endif
+    int argc;
     char **argv = parse_args(cmdline, &argc);
     bool ok = interpret_cmda(argc, argv);
-    int i;
-    for (i = 0; i < argc; i++)
+    for (int i = 0; i < argc; i++)
         free_string(argv[i]);
     free_array(argv, argc, sizeof(char *));
+
     return ok;
 }
 
 /* Set function to be executed as part of program exit */
 void add_quit_helper(cmd_function qf)
 {
-    if (quit_helper_cnt < MAXQUIT) {
+    if (quit_helper_cnt < MAXQUIT)
         quit_helpers[quit_helper_cnt++] = qf;
-    } else
+    else
         report_event(MSG_FATAL, "Exceeded limit on quit helpers");
-}
-
-/* Set prompt string */
-void set_prompt(char *p)
-{
-    prompt = p;
 }
 
 /* Turn echoing on/off */
@@ -265,9 +263,8 @@ void set_echo(bool on)
     echo = on ? 1 : 0;
 }
 
-
 /* Built-in commands */
-bool do_quit_cmd(int argc, char *argv[])
+static bool do_quit_cmd(int argc, char *argv[])
 {
     cmd_ptr c = cmd_list;
     bool ok = true;
@@ -276,23 +273,26 @@ bool do_quit_cmd(int argc, char *argv[])
         c = c->next;
         free_block(ele, sizeof(cmd_ele));
     }
+
     param_ptr p = param_list;
     while (p) {
         param_ptr ele = p;
         p = p->next;
         free_block(ele, sizeof(param_ele));
     }
+
     while (buf_stack)
         pop_file();
-    int i;
-    for (i = 0; i < quit_helper_cnt; i++) {
+
+    for (int i = 0; i < quit_helper_cnt; i++) {
         ok = ok && quit_helpers[i](argc, argv);
     }
+
     quit_flag = true;
     return ok;
 }
 
-bool do_help_cmd(int argc, char *argv[])
+static bool do_help_cmd(int argc, char *argv[])
 {
     cmd_ptr clist = cmd_list;
     report(1, "Commands:", argv[0]);
@@ -310,17 +310,17 @@ bool do_help_cmd(int argc, char *argv[])
     return true;
 }
 
-bool do_comment_cmd(int argc, char *argv[])
+static bool do_comment_cmd(int argc, char *argv[])
 {
-    int i;
     if (echo)
         return true;
-    for (i = 0; i < argc - 1; i++) {
+
+    int i;
+    for (i = 0; i < argc - 1; i++)
         report_noreturn(1, "%s ", argv[i]);
-    }
-    if (i < argc) {
+    if (i < argc)
         report(1, "%s", argv[i]);
-    }
+
     return true;
 }
 
@@ -331,13 +331,13 @@ bool get_int(char *vname, int *loc)
     long int v = strtol(vname, &end, 0);
     if (v == LONG_MIN || *end != '\0')
         return false;
+
     *loc = (int) v;
     return true;
 }
 
-bool do_option_cmd(int argc, char *argv[])
+static bool do_option_cmd(int argc, char *argv[])
 {
-    size_t i;
     if (argc == 1) {
         param_ptr plist = param_list;
         report(1, "Options:");
@@ -348,7 +348,8 @@ bool do_option_cmd(int argc, char *argv[])
         }
         return true;
     }
-    for (i = 1; i < argc; i++) {
+
+    for (int i = 1; i < argc; i++) {
         char *name = argv[i];
         int value = 0;
         bool found = false;
@@ -378,36 +379,40 @@ bool do_option_cmd(int argc, char *argv[])
             return false;
         }
     }
+
     return true;
 }
 
-bool do_source_cmd(int argc, char *argv[])
+static bool do_source_cmd(int argc, char *argv[])
 {
     if (argc < 2) {
         report(1, "No source file given");
         return false;
     }
+
     if (!push_file(argv[1])) {
         report(1, "Could not open source file '%s'", argv[1]);
         return false;
     }
+
     return true;
 }
 
-bool do_log_cmd(int argc, char *argv[])
+static bool do_log_cmd(int argc, char *argv[])
 {
     if (argc < 2) {
         report(1, "No log file given");
         return false;
     }
+
     bool result = set_logfile(argv[1]);
-    if (!result) {
+    if (!result)
         report(1, "Couldn't open log file '%s'", argv[1]);
-    }
+
     return result;
 }
 
-bool do_time_cmd(int argc, char *argv[])
+static bool do_time_cmd(int argc, char *argv[])
 {
     double delta = delta_time(&last_time);
     bool ok = true;
@@ -423,32 +428,36 @@ bool do_time_cmd(int argc, char *argv[])
             report(1, "Delta time = %.3f", delta);
         }
     }
+
     return ok;
 }
 
 /* Create new buffer for named file.
-   Name == NULL for stdin.
-   Return true if successful.
-*/
+ * Name == NULL for stdin.
+ * Return true if successful.
+ */
 static bool push_file(char *fname)
 {
     int fd = fname ? open(fname, O_RDONLY) : STDIN_FILENO;
     if (fd < 0)
         return false;
+
     if (fd > fd_max)
         fd_max = fd;
+
     rio_ptr rnew = malloc_or_fail(sizeof(rio_t), "push_file");
     rnew->fd = fd;
     rnew->cnt = 0;
     rnew->bufptr = rnew->buf;
     rnew->prev = buf_stack;
     buf_stack = rnew;
+
     return true;
 }
 
 /* Pop a file buffer from stack.
-   Return true if stack is now empty
-*/
+ * Return true if stack is now empty
+ */
 static void pop_file()
 {
     if (buf_stack) {
@@ -459,7 +468,6 @@ static void pop_file()
     }
 }
 
-
 /* Handling of input */
 static void init_in()
 {
@@ -467,15 +475,15 @@ static void init_in()
 }
 
 /* Read command from input file.
-   When hit EOF, close that file and return NULL
-*/
+ * When hit EOF, close that file and return NULL
+ */
 static char *readline()
 {
     int cnt;
     char c;
     char *lptr = linebuf;
 
-    if (buf_stack == NULL)
+    if (!buf_stack)
         return NULL;
 
     for (cnt = 0; cnt < RIO_BUFSIZE - 2; cnt++) {
@@ -496,10 +504,11 @@ static char *readline()
                         report_noreturn(1, linebuf);
                     }
                     return linebuf;
-                } else
-                    return NULL;
+                }
+                return NULL;
             }
         }
+
         /* Have text in buffer */
         c = *buf_stack->bufptr++;
         *lptr++ = c;
@@ -507,57 +516,47 @@ static char *readline()
         if (c == '\n')
             break;
     }
+
     if (c != '\n') {
         /* Hit buffer limit.  Artificially terminate line */
         *lptr++ = '\n';
     }
     *lptr++ = '\0';
+
     if (echo) {
         report_noreturn(1, prompt);
         report_noreturn(1, linebuf);
     }
+
     return linebuf;
 }
-
-
-void block_console()
-{
-    block_flag = true;
-}
-
-void unblock_console()
-{
-    block_flag = false;
-    if (block_timing) {
-        double delta = delta_time(&last_time);
-        report(1, "Delta time = %.3f", delta);
-    }
-    block_timing = false;
-}
-
 
 /* Determine if there is a complete command line in input buffer */
 static bool read_ready()
 {
-    int i;
-    for (i = 0; buf_stack && i < buf_stack->cnt; i++) {
+    for (int i = 0; buf_stack && i < buf_stack->cnt; i++) {
         if (buf_stack->bufptr[i] == '\n')
             return true;
     }
+
     return false;
 }
 
+static bool cmd_done()
+{
+    return !buf_stack || quit_flag;
+}
+
 /*
-   Handle command processing in program that uses select as main control loop.
-   Like select, but checks whether command input either present in internal
-   buffer
-   or readable from command input.  If so, that command is executed.
-   Same return as select.  Command input file removed from readfds
-
-   nfds should be set to the maximum file descriptor for network sockets.
-   If nfds == 0, this indicates that there is no pending network activity
-*/
-
+ * Handle command processing in program that uses select as main control loop.
+ * Like select, but checks whether command input either present in internal
+ * buffer
+ * or readable from command input.  If so, that command is executed.
+ * Same return as select.  Command input file removed from readfds
+ *
+ * nfds should be set to the maximum file descriptor for network sockets.
+ * If nfds == 0, this indicates that there is no pending network activity
+ */
 int cmd_select(int nfds,
                fd_set *readfds,
                fd_set *writefds,
@@ -572,12 +571,15 @@ int cmd_select(int nfds,
         interpret_cmd(cmdline);
         prompt_flag = true;
     }
+
     if (cmd_done())
         return 0;
+
     if (!block_flag) {
         /* Process any commands in input buffer */
-        if (readfds == NULL)
+        if (!readfds)
             readfds = &local_readset;
+
         /* Add input fd to readset for select */
         infd = buf_stack->fd;
         FD_SET(infd, readfds);
@@ -586,15 +588,17 @@ int cmd_select(int nfds,
             fflush(stdout);
             prompt_flag = true;
         }
-        if (infd >= nfds) {
+
+        if (infd >= nfds)
             nfds = infd + 1;
-        }
     }
     if (nfds == 0)
         return 0;
+
     int result = select(nfds, readfds, writefds, exceptfds, timeout);
     if (result <= 0)
         return result;
+
     infd = buf_stack->fd;
     if (readfds && FD_ISSET(infd, readfds)) {
         /* Commandline input available */
@@ -607,28 +611,11 @@ int cmd_select(int nfds,
     return result;
 }
 
-
-bool start_cmd(char *infile_name)
-{
-    bool ok = push_file(infile_name);
-    if (!ok)
-        report(1, "Could not open source file '%s'",
-               infile_name ? infile_name : "standard input");
-    return ok;
-}
-
-bool cmd_done()
-{
-    return buf_stack == NULL || quit_flag;
-}
-
-
 bool finish_cmd()
 {
     bool ok = true;
-    if (!quit_flag) {
+    if (!quit_flag)
         ok = ok && do_quit_cmd(0, NULL);
-    }
     return ok && err_cnt == 0;
 }
 
@@ -638,8 +625,8 @@ bool run_console(char *infile_name)
         report(1, "ERROR: Could not open source file '%s'", infile_name);
         return false;
     }
-    while (!cmd_done()) {
+
+    while (!cmd_done())
         cmd_select(0, NULL, NULL, NULL, NULL);
-    }
     return err_cnt == 0;
 }
