@@ -5,6 +5,10 @@
 #include "harness.h"
 #include "queue.h"
 
+#ifndef strlcpy
+#define strlcpy(dst, src, sz) snprintf((dst), (sz), "%s", (src))
+#endif
+
 /*
  * Create empty queue.
  * Return NULL if could not allocate space.
@@ -13,7 +17,10 @@ queue_t *q_new()
 {
     queue_t *q = malloc(sizeof(queue_t));
     /* TODO: What if malloc returned NULL? */
+    if (!q)
+        return NULL;
     q->head = NULL;
+    q->size = 0;
     return q;
 }
 
@@ -35,12 +42,23 @@ void q_free(queue_t *q)
 bool q_insert_head(queue_t *q, char *s)
 {
     list_ele_t *newh;
+    char *temp_s;
+    size_t bufsize = (strlen(s) + 1) * sizeof(char);
+
     /* TODO: What should you do if the q is NULL? */
-    newh = malloc(sizeof(list_ele_t));
+    if (!q)
+        return false;
     /* Don't forget to allocate space for the string and copy it */
     /* What if either call to malloc returns NULL? */
+    newh = malloc(sizeof(list_ele_t));
+    temp_s = malloc(bufsize);
+    if (!newh || !temp_s)
+        return false;
+    strlcpy(temp_s, s, bufsize);
+    newh->value = temp_s;
     newh->next = q->head;
     q->head = newh;
+    q->size++;
     return true;
 }
 
@@ -71,7 +89,18 @@ bool q_remove_head(queue_t *q, char *sp, size_t bufsize)
 {
     /* TODO: You need to fix up this code. */
     /* TODO: Remove the above comment when you are about to implement. */
+    if (!q || q->size == 0)
+        return false;
+
+    list_ele_t *to_del = q->head;
+    if (sp) {
+        memset(sp, '\0', bufsize);
+        strncpy(sp, to_del->value, bufsize);
+    }
     q->head = q->head->next;
+    free(to_del->value);
+    free(to_del);
+    q->size--;
     return true;
 }
 
@@ -84,7 +113,10 @@ int q_size(queue_t *q)
     /* TODO: You need to write the code for this function */
     /* Remember: It should operate in O(1) time */
     /* TODO: Remove the above comment when you are about to implement. */
-    return 0;
+    if (!q) {
+        return 0;
+    }
+    return q->size;
 }
 
 /*
